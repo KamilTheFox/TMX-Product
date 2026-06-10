@@ -1,0 +1,110 @@
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+
+CREATE TABLE IF NOT EXISTS text_prob (
+    id_text  SERIAL PRIMARY KEY,
+    text     TEXT
+);
+
+
+CREATE TABLE IF NOT EXISTS category (
+    id_categ SERIAL PRIMARY KEY,
+    name     TEXT NOT NULL UNIQUE
+);
+
+
+CREATE TABLE IF NOT EXISTS lines (
+    id_line  SERIAL PRIMARY KEY,
+    name     TEXT NOT NULL,
+    number   VARCHAR,
+    hex      TEXT,
+    CONSTRAINT line_hex_chk
+      CHECK (hex IS NULL OR hex ~* '^[0-9a-f]{6}$'),
+    geom    geometry(MULTILINESTRING, 4326) NOT NULL
+);
+
+
+
+
+
+
+
+CREATE TABLE IF NOT EXISTS trains (
+    id_train SERIAL PRIMARY KEY,
+    number VARCHAR(6) NOT NULL,
+    id_line INT REFERENCES lines(id_line) ON DELETE RESTRICT,
+    activ bool,
+
+    CONSTRAINT train_number_chk
+        CHECK (number ~ '^[0-9A-Za-zА-Яа-я_-]{1,6}$')
+);
+
+
+CREATE TABLE IF NOT EXISTS wagons (
+    id_wagon SERIAL PRIMARY KEY,
+    number VARCHAR(6) NOT NULL,
+    id_train INT REFERENCES trains(id_train) ON DELETE RESTRICT,
+    activ bool,
+    
+    CONSTRAINT wagon_number_chk
+        CHECK (number ~ '^[0-9A-Za-zА-Яа-я_-]{1,6}$')
+);
+
+CREATE TABLE IF NOT EXISTS defects (
+    id BIGSERIAL PRIMARY KEY,
+    data_time TIMESTAMP NOT NULL DEFAULT now(),
+    id_wagon  INT REFERENCES wagons(id_wagon) ON DELETE RESTRICT,
+    id_train  INT REFERENCES trains(id_train) ON DELETE RESTRICT,
+    id_text   INT REFERENCES text_prob(id_text) ON DELETE RESTRICT,
+    id_categ  INT NOT NULL REFERENCES category(id_categ) ON DELETE RESTRICT,
+    id_line   INT NOT NULL REFERENCES lines(id_line) ON DELETE RESTRICT
+);
+
+
+-- Индексы для быстрого гео-поиска
+CREATE INDEX IF NOT EXISTS idx_lines_geom ON lines USING GIST (geom);
+
+
+
+CREATE EXTENSION IF NOT EXISTS citext;
+
+
+CREATE TABLE IF NOT EXISTS users (
+    id_user BIGSERIAL PRIMARY KEY,
+    email CITEXT NOT NULL UNIQUE,
+    coin INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    admin bool DEFAULT false,
+    ban bool DEFAULT false,
+    CHECK (
+        email ~* '^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$'
+    )
+);
+
+CREATE TABLE IF NOT EXISTS auth_codes (
+    id_code BIGSERIAL PRIMARY KEY,
+    email CITEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT false,
+    attempts INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_codes_email_active
+ON auth_codes (email, created_at DESC)
+WHERE used = false;
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id_session BIGSERIAL PRIMARY KEY,
+    id_user BIGINT NOT NULL REFERENCES users(id_user) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash
+ON auth_sessions (token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_id_user
+ON auth_sessions (id_user);

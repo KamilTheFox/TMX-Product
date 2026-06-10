@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metro Admin Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <div class="bg-white rounded-lg shadow p-6">
+            <h1 class="text-2xl font-bold mb-4 text-center">🚇 Metro Admin Panel</h1>
+            
+            <!-- Login -->
+            <div id="loginPanel">
+                <div class="max-w-md mx-auto">
+                    <h2 class="text-xl mb-4 text-center">Вход</h2>
+                    <input type="email" id="email" placeholder="Email" class="w-full border p-2 rounded mb-2">
+                    <input type="text" id="code" placeholder="Код (любой)" class="w-full border p-2 rounded mb-2">
+                    <button onclick="login()" class="w-full bg-blue-500 text-white py-2 rounded">Войти</button>
+                </div>
+            </div>
+            
+            <!-- Admin Panel -->
+            <div id="adminPanel" style="display:none;">
+                <div class="flex gap-2 mb-4 flex-wrap">
+                    <button onclick="loadStats()" class="bg-green-500 text-white px-3 py-2 rounded">📊 Статистика</button>
+                    <button onclick="loadLines()" class="bg-blue-500 text-white px-3 py-2 rounded">🚇 Линии</button>
+                    <button onclick="loadTrains()" class="bg-indigo-500 text-white px-3 py-2 rounded">🚆 Поезда</button>
+                    <button onclick="loadWagons()" class="bg-purple-500 text-white px-3 py-2 rounded">🚃 Вагоны</button>
+                    <button onclick="loadCategories()" class="bg-yellow-500 text-white px-3 py-2 rounded">📑 Категории</button>
+                    <button onclick="loadPhotos()" class="bg-pink-500 text-white px-3 py-2 rounded">📸 Фото</button>
+                    <button onclick="logout()" class="bg-red-500 text-white px-3 py-2 rounded ml-auto">🚪 Выйти</button>
+                </div>
+                <div id="content" class="mt-4"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('token');
+        
+        if (token) {
+            document.getElementById('loginPanel').style.display = 'none';
+            document.getElementById('adminPanel').style.display = 'block';
+            loadStats();
+        }
+        
+        async function login() {
+            const email = document.getElementById('email').value;
+            const code = document.getElementById('code').value || '123456';
+            
+            const resp = await fetch('/api/auth/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email, code})
+            });
+            const data = await resp.json();
+            if (data.access_token) {
+                localStorage.setItem('token', data.access_token);
+                location.reload();
+            } else {
+                alert('Ошибка: ' + JSON.stringify(data));
+            }
+        }
+        
+        async function logout() {
+            localStorage.removeItem('token');
+            location.reload();
+        }
+        
+        async function apiCall(url, options = {}) {
+            const resp = await fetch(url, {
+                ...options,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                }
+            });
+            return resp.json();
+        }
+        
+        async function loadStats() {
+            const stats = await apiCall('/api/admin/stats');
+            document.getElementById('content').innerHTML = `
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="bg-blue-100 p-4 rounded text-center"><div class="text-2xl font-bold">${stats.total_users}</div><div>Пользователей</div></div>
+                    <div class="bg-green-100 p-4 rounded text-center"><div class="text-2xl font-bold">${stats.total_lines}</div><div>Линий</div></div>
+                    <div class="bg-indigo-100 p-4 rounded text-center"><div class="text-2xl font-bold">${stats.total_trains}</div><div>Поездов</div></div>
+                    <div class="bg-purple-100 p-4 rounded text-center"><div class="text-2xl font-bold">${stats.total_wagons}</div><div>Вагонов</div></div>
+                    <div class="bg-yellow-100 p-4 rounded text-center"><div class="text-2xl font-bold">${stats.total_categories}</div><div>Категорий</div></div>
+                </div>
+            `;
+        }
+        
+        async function loadLines() {
+            const lines = await apiCall('/api/admin/lines');
+            document.getElementById('content').innerHTML = `
+                <div class="mb-4">
+                    <input type="text" id="newLineNumber" placeholder="Номер" class="border p-2 rounded">
+                    <input type="text" id="newLineName" placeholder="Название" class="border p-2 rounded">
+                    <button onclick="createLine()" class="bg-green-500 text-white px-4 py-2 rounded">➕ Добавить</button>
+                </div>
+                <div class="grid gap-2">
+                    ${lines.map(l => `
+                        <div class="border rounded p-3 flex justify-between">
+                            <div><b>${l.number || '—'}</b> ${l.name}</div>
+                            <button onclick="deleteLine(${l.id_line})" class="text-red-500">🗑</button>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        async function createLine() {
+            const number = document.getElementById('newLineNumber').value;
+            const name = document.getElementById('newLineName').value;
+            if (!name) { alert('Введите название'); return; }
+            await apiCall('/api/admin/lines', {method: 'POST', body: JSON.stringify({number, name})});
+            loadLines();
+        }
+        
+        async function deleteLine(id) {
+            if (!confirm('Удалить линию?')) return;
+            await apiCall(`/api/admin/lines/${id}`, {method: 'DELETE'});
+            loadLines();
+        }
+        
+        async function loadTrains() {
+            const [trains, lines] = await Promise.all([
+                apiCall('/api/admin/trains'),
+                apiCall('/api/admin/lines')
+            ]);
+            
+            document.getElementById('content').innerHTML = `
+                <div class="mb-4 p-3 bg-gray-100 rounded">
+                    <h3 class="font-bold mb-2">➕ Добавить поезд</h3>
+                    <input type="text" id="trainNumber" placeholder="Номер" class="border p-2 rounded">
+                    <select id="trainLine" class="border p-2 rounded">
+                        <option value="">Выберите линию</option>
+                        ${lines.map(l => `<option value="${l.id_line}">${l.number || ''} ${l.name}</option>`).join('')}
+                    </select>
+                    <button onclick="createTrain()" class="bg-green-500 text-white px-4 py-2 rounded">Добавить</button>
+                </div>
+                <div class="grid gap-3">
+                    ${trains.map(t => `
+                        <div class="border rounded p-3">
+                            <div class="flex justify-between">
+                                <div><b>🚆 Поезд ${t.number}</b> ${t.line_name ? `(${t.line_name})` : ''}</div>
+                                <button onclick="deleteTrain(${t.id_train})" class="text-red-500">🗑</button>
+                            </div>
+                            <select id="lineSelect_${t.id_train}" class="border p-1 rounded text-sm mt-2">
+                                <option value="">Сменить линию</option>
+                                ${lines.map(l => `<option value="${l.id_line}" ${t.id_line == l.id_line ? 'selected' : ''}>${l.name}</option>`).join('')}
+                            </select>
+                            <button onclick="updateTrainLine(${t.id_train})" class="bg-blue-500 text-white px-2 py-1 rounded text-sm mt-1">💾 Сменить линию</button>
+                            <div class="mt-2 pt-2 border-t">
+                                <div class="text-sm font-bold">Вагоны:</div>
+                                <div id="wagonsList_${t.id_train}" class="flex flex-wrap gap-1 mt-1"></div>
+                                <div class="flex gap-2 mt-2">
+                                    <input type="text" id="newWagon_${t.id_train}" placeholder="Номер вагона" class="border p-1 rounded text-sm w-32">
+                                    <button onclick="addWagon(${t.id_train})" class="bg-green-500 text-white px-2 py-1 rounded text-sm">+ Добавить</button>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            loadWagonsList();
+        }
+        
+        async function loadWagonsList() {
+            const wagons = await apiCall('/api/admin/wagons');
+            for (let train of await apiCall('/api/admin/trains')) {
+                const container = document.getElementById(`wagonsList_${train.id_train}`);
+                if (container) {
+                    const trainWagons = wagons.filter(w => w.id_train === train.id_train);
+                    container.innerHTML = trainWagons.map(w => `
+                        <span class="bg-gray-200 px-2 py-1 rounded text-sm">🚃 ${w.number}</span>
+                    `).join('') || '<span class="text-gray-400 text-sm">Нет вагонов</span>';
+                }
+            }
+        }
+        
+        async function createTrain() {
+            const number = document.getElementById('trainNumber').value;
+            const line_id = document.getElementById('trainLine').value;
+            if (!number) { alert('Введите номер'); return; }
+            await apiCall('/api/admin/trains', {method: 'POST', body: JSON.stringify({number, line_id: line_id || null})});
+            loadTrains();
+        }
+        
+        async function updateTrainLine(trainId) {
+            const select = document.getElementById(`lineSelect_${trainId}`);
+            const new_id_line = select.value || null;
+            await apiCall(`/api/admin/trains/${trainId}/line`, {method: 'PATCH', body: JSON.stringify({new_id_line})});
+            loadTrains();
+        }
+        
+        async function deleteTrain(id) {
+            if (!confirm('Удалить поезд?')) return;
+            await apiCall(`/api/admin/trains/${id}`, {method: 'DELETE'});
+            loadTrains();
+        }
+        
+        async function addWagon(trainId) {
+            const input = document.getElementById(`newWagon_${trainId}`);
+            const number = input.value;
+            if (!number) { alert('Введите номер'); return; }
+            await apiCall('/api/admin/wagons', {method: 'POST', body: JSON.stringify({number, train_id: trainId})});
+            input.value = '';
+            loadTrains();
+        }
+        
+        async function loadWagons() {
+            const [wagons, trains] = await Promise.all([
+                apiCall('/api/admin/wagons'),
+                apiCall('/api/admin/trains')
+            ]);
+            
+            document.getElementById('content').innerHTML = `
+                <div class="mb-4 p-3 bg-gray-100 rounded">
+                    <h3 class="font-bold mb-2">➕ Добавить вагон</h3>
+                    <input type="text" id="wagonNumber" placeholder="Номер" class="border p-2 rounded">
+                    <select id="wagonTrain" class="border p-2 rounded">
+                        <option value="">Без поезда</option>
+                        ${trains.map(t => `<option value="${t.id_train}">Поезд ${t.number}</option>`).join('')}
+                    </select>
+                    <button onclick="createWagon()" class="bg-green-500 text-white px-4 py-2 rounded">Добавить</button>
+                </div>
+                <div class="grid gap-2">
+                    ${wagons.map(w => `
+                        <div class="border rounded p-3 flex justify-between items-center">
+                            <div><b>🚃 ${w.number}</b> ${w.train_number ? `→ Поезд ${w.train_number}` : '(без поезда)'}</div>
+                            <div>
+                                <select id="trainSelect_${w.id_wagon}" class="border p-1 rounded text-sm">
+                                    <option value="">Переместить</option>
+                                    ${trains.map(t => `<option value="${t.id_train}" ${w.id_train == t.id_train ? 'selected' : ''}>Поезд ${t.number}</option>`).join('')}
+                                </select>
+                                <button onclick="updateWagonTrain(${w.id_wagon})" class="bg-blue-500 text-white px-2 py-1 rounded text-sm">💾</button>
+                                <button onclick="deleteWagon(${w.id_wagon})" class="text-red-500 ml-2">🗑</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        async function createWagon() {
+            const number = document.getElementById('wagonNumber').value;
+            const train_id = document.getElementById('wagonTrain').value;
+            if (!number) { alert('Введите номер'); return; }
+            await apiCall('/api/admin/wagons', {method: 'POST', body: JSON.stringify({number, train_id: train_id || null})});
+            loadWagons();
+        }
+        
+        async function updateWagonTrain(wagonId) {
+            const select = document.getElementById(`trainSelect_${wagonId}`);
+            const new_id_train = select.value || null;
+            await apiCall(`/api/admin/wagons/${wagonId}/train`, {method: 'PATCH', body: JSON.stringify({new_id_train})});
+            loadWagons();
+        }
+        
+        async function deleteWagon(id) {
+            if (!confirm('Удалить вагон?')) return;
+            await apiCall(`/api/admin/wagons/${id}`, {method: 'DELETE'});
+            loadWagons();
+        }
+        
+        async function loadCategories() {
+            const cats = await apiCall('/api/admin/categories');
+            document.getElementById('content').innerHTML = `
+                <div class="mb-4">
+                    <input type="text" id="newCatName" placeholder="Название" class="border p-2 rounded">
+                    <button onclick="createCategory()" class="bg-green-500 text-white px-4 py-2 rounded">➕ Добавить</button>
+                </div>
+                <div class="grid gap-2">
+                    ${cats.map(c => `
+                        <div class="border rounded p-3 flex justify-between">
+                            <div>${c.name}</div>
+                            <button onclick="deleteCategory(${c.id_categ})" class="text-red-500">🗑</button>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        async function createCategory() {
+            const name = document.getElementById('newCatName').value;
+            if (!name) { alert('Введите название'); return; }
+            await apiCall('/api/admin/categories', {method: 'POST', body: JSON.stringify({name})});
+            loadCategories();
+        }
+        
+        async function deleteCategory(id) {
+            if (!confirm('Удалить категорию?')) return;
+            await apiCall(`/api/admin/categories/${id}`, {method: 'DELETE'});
+            loadCategories();
+        }
+        
+        async function loadPhotos() {
+            const data = await fetch('/api/photos').then(r => r.json());
+            const photos = data.photos || [];
+            document.getElementById('content').innerHTML = `
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    ${photos.map(p => `
+                        <div class="border rounded overflow-hidden">
+                            <img src="${p.path}" class="w-full h-40 object-cover">
+                            <div class="p-2">
+                                <p class="text-xs truncate">${p.name}</p>
+                                <button onclick="deletePhoto('${p.name}')" class="mt-1 w-full bg-red-500 text-white px-2 py-1 rounded text-sm">Удалить</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        async function deletePhoto(name) {
+            if (!confirm('Удалить фото?')) return;
+            await fetch(`/api/photos/${name}`, {method: 'DELETE'});
+            loadPhotos();
+        }
+    </script>
+</body>
+</html>
