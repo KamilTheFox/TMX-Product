@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 import '../api/api_client.dart';
+import '../report_queue.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -19,6 +21,7 @@ class _ReportScreenState extends State<ReportScreen> {
   bool _loading = false;
   bool _sending = false;
   String? _error;
+  int _pendingCount = 0;
 
   List<dynamic> _categories = [];
   Map<String, dynamic>? _selectedCategory;
@@ -39,12 +42,18 @@ class _ReportScreenState extends State<ReportScreen> {
   Future<void> _init() async {
     setState(() => _loading = true);
     await _loadCategories();
+    await _refreshPendingCount();
     setState(() => _loading = false);
   }
 
   Future<void> _loadCategories() async {
     final cats = await ApiClient.getCategories();
     setState(() => _categories = cats);
+  }
+
+  Future<void> _refreshPendingCount() async {
+    final count = await ReportQueue.count();
+    if (mounted) setState(() => _pendingCount = count);
   }
 
   Future<void> _takePhoto() async {
@@ -92,6 +101,14 @@ class _ReportScreenState extends State<ReportScreen> {
     setState(() => _sending = false);
 
     if (ok && mounted) {
+      // Успешно — пробуем заодно отправить накопленную очередь
+      final flushed = await ReportQueue.flush();
+      if (flushed > 0) {
+        developer.log('Flushed $flushed queued report(s) after successful send',
+            name: 'ReportScreen');
+      }
+      await _refreshPendingCount();
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Репорт успешно отправлен'),
@@ -100,7 +117,31 @@ class _ReportScreenState extends State<ReportScreen> {
       );
       Navigator.of(context).pop();
     } else {
-      setState(() => _error = 'Ошибка отправки. Попробуйте ещё раз.');
+      // Нет сети или ошибка — сохраняем в очередь
+      final report = QueuedReport(
+        id: const Uuid().v4(),
+        photoPath: _photo!.path,
+        wagon: wagon,
+        category: _selectedCategory!['id_categ'].toString(),
+        textProb: _textController.text.trim().isEmpty
+            ? null
+            : _textController.text.trim(),
+        createdAt: DateTime.now(),
+      );
+      await ReportQueue.enqueue(report);
+      await _refreshPendingCount();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Нет связи — репорт сохранён и отправится автоматически'),
+            backgroundColor: Color(0xFFF5A623),
+            duration: Duration(seconds: 4),
+          ),
+        );
+        Navigator.of(context).pop();
+      }
     }
   }
 
@@ -131,6 +172,32 @@ class _ReportScreenState extends State<ReportScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Баннер ожидающих репортов
+                  if (_pendingCount > 0) ...[
+                    _PendingBanner(
+                      count: _pendingCount,
+                      onRetry: () async {
+                        final sent = await ReportQueue.flush();
+                        await _refreshPendingCount();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                sent > 0
+                                    ? 'Отправлено $sent репорт(ов)'
+                                    : 'Нет связи, попробуйте позже',
+                              ),
+                              backgroundColor: sent > 0
+                                  ? const Color(0xFF2EAF64)
+                                  : const Color(0xFFD64545),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
                   // Фото
                   const _SectionLabel(label: 'ФОТО ДЕФЕКТА'),
                   const SizedBox(height: 8),
@@ -183,7 +250,7 @@ class _ReportScreenState extends State<ReportScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Ошибка
+                  // Ошибка валидации
                   if (_error != null) ...[
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -223,7 +290,67 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 }
 
-// ─── Виджеты ─────────────────────────────────────────────────────────────────
+// ─── Баннер ожидающих репортов ────────────────────────────────────────────────
+
+class _PendingBanner extends StatelessWidget {
+  final int count;
+  final VoidCallback onRetry;
+
+  const _PendingBanner({required this.count, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8EC),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFF5A623)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_upload_outlined,
+              color: Color(0xFFF5A623), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Ожидает отправки: $count репорт${_plural(count)}',
+              style: const TextStyle(
+                color: Color(0xFF1A1F2B),
+                fontSize: 13,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Отправить',
+              style: TextStyle(
+                color: Color(0xFF004F9E),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _plural(int n) {
+    if (n % 10 == 1 && n % 100 != 11) return '';
+    if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20))
+      return 'а';
+    return 'ов';
+  }
+}
+
+// ─── Остальные виджеты ────────────────────────────────────────────────────────
 
 class _SectionLabel extends StatelessWidget {
   final String label;
@@ -287,10 +414,9 @@ class _Dropdown extends StatelessWidget {
           items: items.map((item) {
             return DropdownMenuItem<Map<String, dynamic>>(
               value: item,
-              child: Text(
-                item[labelKey].toString(),
-                style: const TextStyle(color: Color(0xFF1A1F2B), fontSize: 14),
-              ),
+              child: Text(item[labelKey].toString(),
+                  style:
+                      const TextStyle(color: Color(0xFF1A1F2B), fontSize: 14)),
             );
           }).toList(),
           onChanged: onChanged,
