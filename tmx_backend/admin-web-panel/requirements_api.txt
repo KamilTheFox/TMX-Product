@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-psycopg[binary]
-psycopg-pool
-python-dotenv
-pydantic[email]
-python-multipart
